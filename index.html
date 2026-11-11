@@ -1,0 +1,1152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TrustMed-RL: a doctor agent that checks its evidence</title>
+<meta name="description" content="Follow one real consultation, turn by turn: history, examination, tests, an evidence integrity check, literature search and a diagnosis.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --paper: #edf1f3;
+  --surface: #ffffff;
+  --ink: #13232c;
+  --muted: #566772;
+  --line: #d2dbe1;
+  --history: #a96a06;
+  --workup: #0d756d;
+  --gate: #ad2259;
+  --conclude: #403c9f;
+  --good: #1c7c4a;
+  --bad: #b3261e;
+  --display: "Bricolage Grotesque", "Segoe UI", sans-serif;
+  --body: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  --c: var(--ink);
+}
+[data-phase="history"] { --c: var(--history); }
+[data-phase="workup"] { --c: var(--workup); }
+[data-phase="gate"] { --c: var(--gate); }
+[data-phase="conclude"] { --c: var(--conclude); }
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font: 400 17px/1.55 var(--body); -webkit-font-smoothing: antialiased;
+}
+img { max-width: 100%; display: block; }
+a { color: inherit; }
+button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 3px solid var(--conclude); outline-offset: 2px; border-radius: 4px; }
+h1, h2, h3 { font-family: var(--display); line-height: 1.05; margin: 0; letter-spacing: -0.02em; }
+h2 { font-size: clamp(2rem, 4.2vw, 3.25rem); font-weight: 800; max-width: 18ch; }
+p { margin: 0 0 1em; max-width: 68ch; }
+.wrap { width: min(1240px, 100% - 40px); margin-inline: auto; }
+.lede { font-size: 1.15rem; color: var(--muted); max-width: 60ch; margin-top: 18px; }
+
+/* top bar */
+.top { display: flex; justify-content: space-between; align-items: center; padding: 20px 0; }
+.brand { font: 800 1.15rem var(--display); letter-spacing: -0.01em; text-decoration: none; }
+.top nav { display: flex; gap: 22px; font-size: 0.95rem; }
+.top nav a { text-decoration: none; color: var(--muted); }
+.top nav a:hover { color: var(--ink); }
+
+/* hero */
+.hero { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 56px; align-items: center; padding: 40px 0 72px; }
+.hero h1 { font-size: clamp(2.7rem, 6.4vw, 5.4rem); font-weight: 800; }
+.hero .sub { font-size: 1.25rem; margin-top: 22px; max-width: 34ch; }
+.byline { color: var(--muted); font-size: 0.95rem; margin-top: 18px; }
+.links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+.btn {
+  display: inline-flex; align-items: center; gap: 8px; padding: 11px 18px; border-radius: 999px;
+  border: 1.5px solid var(--ink); background: transparent; text-decoration: none; font-weight: 600; font-size: 0.95rem;
+}
+.btn:hover { background: var(--ink); color: #fff; }
+.btn .logo { width: 18px; height: 18px; fill: currentColor; flex: none; }
+.btn.solid { background: var(--ink); color: #fff; }
+.btn.solid:hover { background: var(--conclude); border-color: var(--conclude); }
+
+.room { position: relative; background: var(--surface); border-radius: 28px; padding: 30px; border: 1px solid var(--line); }
+.room .who { font-size: 0.9rem; color: var(--muted); margin-bottom: 12px; }
+.room blockquote {
+  margin: 0; font: 700 clamp(1.5rem, 2.6vw, 2.15rem)/1.18 var(--display); letter-spacing: -0.015em;
+}
+.room .ask { margin-top: 26px; display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+.room .ask span { color: var(--muted); font-size: 0.95rem; }
+.caret { display: inline-block; width: 0.5ch; height: 1em; background: var(--history); vertical-align: -0.12em; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+.phases { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin: 0 0 88px; border-top: 2px solid var(--ink); }
+.phases button {
+  text-align: left; background: none; border: 0; border-top: 6px solid var(--c); margin-top: -2px;
+  padding: 16px 18px 6px 0; display: flex; flex-direction: column; justify-content: flex-start;
+}
+.phases button strong { display: block; font: 700 1.3rem var(--display); color: var(--c); }
+.phases button span { font-size: 0.95rem; color: var(--muted); display: block; margin-top: 4px; max-width: 26ch; }
+.phases button:hover strong { text-decoration: underline; }
+
+/* consultation player */
+.player {
+  margin-top: 36px; background: var(--surface); border: 1px solid var(--line); border-radius: 24px; overflow: hidden;
+  display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto;
+  height: min(900px, 94vh); min-height: 660px; scroll-margin-top: 10px;
+}
+.p-head { grid-column: 1 / -1; display: flex; align-items: center; gap: 18px; padding: 12px 20px; border-bottom: 1px solid var(--line); }
+.p-head .where { font: 700 1.1rem var(--display); color: var(--c); min-width: 10ch; }
+.rail { display: flex; gap: 5px; flex: 1; flex-wrap: wrap; justify-content: flex-end; }
+.rail button {
+  width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--c); background: transparent; padding: 0;
+  font-size: 0; transition: transform 0.15s, background 0.15s;
+}
+.rail button.seen { background: var(--c); }
+.rail button.now { transform: scale(1.3); background: var(--c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 25%, transparent); }
+
+.clinic { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--paper); }
+.faces { display: grid; grid-template-columns: 1fr 1fr auto; align-items: end; gap: 14px; padding: 14px 20px 0; background: #dbe5ea; border-bottom: 1px solid var(--line); }
+.face { display: flex; align-items: flex-end; gap: 12px; min-width: 0; transition: opacity 0.4s, filter 0.4s; }
+.face svg { width: 116px; height: 135px; flex: none; display: block; transition: transform 0.5s cubic-bezier(0.6, 0, 0.2, 1); transform-origin: 50% 100%; }
+.face .tag { padding-bottom: 12px; font-size: 0.78rem; line-height: 1.3; color: var(--muted); min-width: 0; }
+.face .tag b { display: block; font: 700 1rem var(--display); color: var(--ink); }
+.face .say { display: inline-flex; gap: 3px; align-items: center; margin-top: 6px; background: #fff; border-radius: 999px; padding: 6px 9px; opacity: 0; }
+.face .say i { width: 5px; height: 5px; border-radius: 50%; background: var(--ink); animation: dots 0.9s infinite; }
+.face .say i:nth-child(2) { animation-delay: 0.15s; }
+.face .say i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes dots { 0%, 60%, 100% { translate: 0 0; } 30% { translate: 0 -3px; } }
+.face.speaking .say { animation: say 1.15s var(--d, 0s) both; }
+@keyframes say { 0% { opacity: 0; } 15%, 85% { opacity: 1; } 100% { opacity: 0; } }
+.face.away { opacity: 0.5; filter: grayscale(0.7); }
+.face.dr.to-pt svg { transform: rotate(-4deg) translateX(-4px); }
+.face.dr.to-sys svg { transform: rotate(4deg) translateX(4px); }
+.mouth-open { opacity: 0; }
+.face.speaking .mouth-open { animation: talk 0.28s steps(1) 4 var(--d, 0s); }
+@keyframes talk { 50% { opacity: 1; } }
+.blink { opacity: 0; animation: blink 5.5s infinite; }
+.face.dr .blink { animation-delay: 2.1s; }
+@keyframes blink { 0%, 96%, 100% { opacity: 0; } 98% { opacity: 1; } }
+
+.sys { text-align: center; font-size: 0.72rem; color: var(--muted); padding-bottom: 10px; width: 190px; }
+.sys b { display: block; color: var(--ink); font-size: 0.84rem; margin-top: 5px; }
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.tile { position: relative; border: 1.5px solid #b9c7cf; border-radius: 9px; padding: 5px 2px 3px; font-size: 0.6rem; line-height: 1.15; color: var(--muted); background: #eaf0f3; transition: background 0.3s, color 0.3s, border-color 0.3s; }
+.tile svg { width: 22px; height: 22px; display: block; margin: 0 auto 1px; stroke: currentColor; fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.tile.used { color: var(--ink); border-color: var(--ink); background: #fff; }
+.tile.on { background: var(--c); border-color: var(--c); color: #fff; animation: pop 0.5s 0.7s both; }
+@keyframes pop { 50% { scale: 1.14; } }
+.tile em { position: absolute; top: -8px; right: -6px; min-width: 17px; height: 17px; line-height: 17px; border-radius: 999px; background: var(--ink); color: #fff; font-size: 0.62rem; font-style: normal; font-weight: 600; }
+
+.thread { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 6px 20px 26px; scroll-behavior: smooth; }
+.turn { display: flex; flex-direction: column; gap: 9px; padding-top: 4px; }
+.turn > .mark { display: flex; align-items: center; gap: 10px; font-size: 0.75rem; font-weight: 600; color: var(--c); margin: 12px 0 2px; }
+.turn > .mark::before, .turn > .mark::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.turn.new .it { animation: rise 0.45s var(--d, 0s) both; }
+.doc .thumbs { margin-top: 10px; }
+.doc.viewer .thumbs { margin-top: 0; }
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+.it { display: flex; flex-direction: column; }
+.row { display: flex; gap: 9px; align-items: flex-start; max-width: 86%; }
+.row.dr { align-self: flex-end; flex-direction: row-reverse; }
+.av { width: 36px; height: 36px; border-radius: 50%; overflow: hidden; flex: none; background: #dbe5ea; }
+.av svg { width: 36px; height: 41px; display: block; }
+.bubble { border-radius: 16px; padding: 10px 14px; font-size: 0.95rem; line-height: 1.45; }
+.row.dr .bubble { background: var(--ink); color: #fff; border-bottom-right-radius: 4px; }
+.row.pt .bubble { background: #fff; border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.sysnote { align-self: center; font-size: 0.82rem; color: var(--muted); background: #fff; border: 1px dashed var(--line); border-radius: 999px; padding: 5px 14px; }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0 0; }
+.chip { font-size: 0.74rem; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); background: #fff; }
+.chip.new { border-color: var(--good); color: var(--good); font-weight: 600; }
+.chip.unk { border-style: dashed; color: var(--muted); }
+.note { font-size: 0.86rem; color: var(--muted); margin: 8px 0 0; }
+
+.doc { background: #fff; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.doc header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 7px 13px; font-size: 0.78rem; color: #fff; background: var(--c); }
+.doc header span { opacity: 0.85; text-align: right; }
+.doc .body { padding: 10px 13px 12px; font-size: 0.9rem; }
+.doc.slip { align-self: flex-end; width: min(78%, 420px); border: 1.5px dashed var(--ink); }
+.doc.slip header { background: var(--ink); }
+.doc.slip ul { list-style: none; margin: 0; padding: 0; }
+.doc.slip li { padding: 2px 0 2px 24px; position: relative; }
+.doc.slip li::before { content: ""; position: absolute; left: 0; top: 6px; width: 13px; height: 13px; border: 1.5px solid var(--ink); border-radius: 3px; background: var(--ink) linear-gradient(135deg, transparent 0 0) ; }
+.doc.slip li::after { content: ""; position: absolute; left: 4px; top: 7px; width: 4px; height: 8px; border: solid #fff; border-width: 0 2px 2px 0; rotate: 45deg; }
+.doc.slip p { margin: 0; }
+.doc.viewer { background: #0c151a; border-color: #0c151a; color: #dbe5ea; }
+.doc.viewer header { background: #1c2a32; }
+.doc.final .dx { font: 800 clamp(1.3rem, 2.2vw, 1.8rem)/1.1 var(--display); margin: 2px 0 12px; }
+table.rows { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+table.rows td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.rows tr:last-child td { border-bottom: 0; }
+table.rows td:first-child { color: var(--muted); width: 36%; }
+.na { color: var(--muted); font-style: italic; }
+.thumbs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.thumb { position: relative; border: 0; padding: 0; background: #000; border-radius: 8px; overflow: hidden; aspect-ratio: 4 / 3; }
+.thumb img { width: 100%; height: 100%; object-fit: contain; }
+.thumb span { position: absolute; left: 5px; top: 5px; background: rgba(12, 21, 26, 0.82); color: #fff; font-size: 0.68rem; padding: 1px 6px; border-radius: 999px; }
+.thumb.locked::after { content: "report withheld"; position: absolute; inset: auto 0 0 0; background: rgba(12, 21, 26, 0.85); color: #ffd27a; font-size: 0.68rem; padding: 3px 0; text-align: center; }
+.thumb.ok::after { content: "✓ matches the order"; position: absolute; inset: auto 0 0 0; background: var(--good); color: #fff; font-size: 0.68rem; padding: 3px 0; text-align: center; }
+.stamp { display: inline-block; font: 800 1.2rem var(--display); color: var(--good); border: 3px solid var(--good); padding: 2px 13px; border-radius: 8px; transform: rotate(-4deg); margin-top: 10px; }
+.turn.new .stamp { animation: stamp 0.45s 2.1s both; }
+@keyframes stamp { from { opacity: 0; transform: rotate(-4deg) scale(1.9); } }
+.report { display: grid; grid-template-columns: 64px 1fr; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); align-items: start; }
+.report:last-child { border-bottom: 0; }
+.report .thumb { aspect-ratio: 1; }
+.hit { padding: 7px 0; border-bottom: 1px solid var(--line); }
+.hit:last-of-type { border-bottom: 0; }
+.hit b { display: block; }
+.hit span { color: var(--muted); }
+.verdict { border: 2px solid var(--conclude); border-radius: 12px; padding: 11px 13px; }
+.verdict b { color: var(--conclude); }
+
+.side { border-left: 1px solid var(--line); overflow: auto; padding: 18px 20px 20px; min-height: 0; min-width: 0; }
+.pill { display: inline-block; font-size: 0.82rem; color: #fff; background: var(--c); font-weight: 600; padding: 3px 11px; border-radius: 999px; }
+.side h3 { font-size: 1.45rem; font-weight: 700; margin: 10px 0 10px; }
+.side p { font-size: 0.94rem; }
+code.action {
+  display: block; font: 0.8rem/1.5 var(--mono); background: var(--ink); color: #e9f1f4; padding: 10px 12px;
+  border-radius: 10px; white-space: pre-wrap; word-break: break-word; margin: 0 0 12px; max-height: 9.5em; overflow: auto;
+}
+code.action b { color: #ffd27a; font-weight: 400; }
+details.why { font-size: 0.92rem; }
+details.why summary { cursor: pointer; color: var(--muted); font-weight: 500; }
+details.why summary:hover { color: var(--ink); }
+details.why div { white-space: pre-wrap; margin-top: 10px; padding: 12px 14px; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; max-height: 40vh; overflow: auto; font-size: 0.88rem; }
+
+.call { background: var(--ink); color: #fff; border-radius: 16px; padding: 16px; margin-top: 16px; }
+.call h4 { font: 700 1.05rem var(--display); margin: 0 0 6px; }
+.call p { color: #c4d2d9; font-size: 0.88rem; margin-bottom: 10px; }
+.call .opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.call .opts button { background: transparent; color: #fff; border: 1.5px solid #6d828e; border-radius: 999px; padding: 6px 12px; font-size: 0.86rem; }
+.call .opts button:hover:not(:disabled) { border-color: #fff; }
+.call .opts button.same { background: #fff; color: var(--ink); border-color: #fff; }
+.call .opts button.picked:not(.same) { border-style: dashed; border-color: #ffd27a; color: #ffd27a; }
+.call .opts button:disabled { cursor: default; }
+.call .after { margin: 12px 0 0; color: #fff; }
+
+.ddx { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.ddx h4 { margin: 0 0 4px; font: 700 1.05rem var(--display); }
+.ddx .why { font-size: 0.86rem; color: var(--muted); margin: 0 0 12px; }
+.ddx ol { list-style: none; margin: 0; padding: 0; position: relative; }
+.ddx li {
+  position: absolute; left: 0; right: 0; top: 0; height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 10px;
+  border-radius: 9px; background: var(--paper); font-size: 0.86rem; line-height: 1.15;
+  transition: transform 0.55s cubic-bezier(0.5, 0, 0.2, 1), opacity 0.4s, background 0.4s, color 0.4s;
+}
+.ddx li span { width: 1.1em; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+.ddx li.lead { background: var(--c); color: #fff; font-weight: 600; }
+.ddx li.lead span { color: #fff; }
+.ddx li.out { opacity: 0; pointer-events: none; }
+.ddx li.fresh { animation: flash 1s 0.5s; }
+@keyframes flash { 30% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 45%, transparent); } }
+.ddx .gone { margin-top: 12px; font-size: 0.8rem; color: var(--muted); }
+.ddx .gone s { display: inline-block; margin: 3px 8px 0 0; }
+.ddx .src { font-size: 0.74rem; color: var(--muted); margin: 10px 0 0; }
+
+.meters { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 16px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.meter { font-size: 0.8rem; color: var(--muted); }
+.meter b { color: var(--ink); font-size: 0.92rem; font-weight: 600; }
+.meter i { display: block; height: 5px; background: var(--line); border-radius: 3px; margin-top: 5px; overflow: hidden; }
+.meter i u { display: block; height: 100%; background: var(--ink); transform-origin: left; transition: transform 0.5s; }
+
+.p-foot { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; padding: 12px 20px; border-top: 1px solid var(--line); background: var(--paper); }
+.nav-btn { justify-self: start; padding: 13px 24px; border-radius: 999px; border: 1.5px solid var(--ink); background: #fff; font-weight: 600; font-size: 1rem; }
+.nav-btn.next { justify-self: end; background: var(--ink); color: #fff; }
+.nav-btn:hover:not(:disabled) { background: var(--conclude); border-color: var(--conclude); color: #fff; }
+.nav-btn:disabled { opacity: 0.35; cursor: default; }
+.p-mid { display: flex; align-items: center; gap: 12px; font-size: 0.9rem; color: var(--muted); }
+#play { border: 1.5px solid var(--ink); background: none; border-radius: 999px; padding: 8px 16px; font-weight: 600; font-size: 0.9rem; color: var(--ink); }
+#play[aria-pressed="true"] { background: var(--ink); color: #fff; }
+
+/* sections */
+section.block { padding: 96px 0; border-top: 1px solid var(--line); }
+.two { display: grid; grid-template-columns: 0.8fr 1.2fr; gap: 56px; align-items: start; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 24px; padding: 26px; }
+
+.order { font-size: 1rem; margin-bottom: 16px; }
+.order b { font-family: var(--display); font-size: 1.2rem; }
+.pick { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.pic { min-width: 0; }
+.pic .shot { display: block; width: 100%; border: 3px solid transparent; background: #0c151a; border-radius: 14px; padding: 0; overflow: hidden; position: relative; }
+.pic .shot img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; }
+.pic .shot span { position: absolute; left: 10px; top: 10px; background: rgba(12, 21, 26, 0.85); color: #fff; font-size: 0.82rem; padding: 3px 10px; border-radius: 999px; }
+.pic.swapped .shot { border-color: var(--gate); }
+.pic.swapped .shot::after { content: "from another patient"; position: absolute; inset: auto 0 0 0; background: var(--gate); color: #fff; padding: 6px; font-size: 0.85rem; font-weight: 600; }
+.pic.fine .shot::after { content: "matches the order"; position: absolute; inset: auto 0 0 0; background: var(--good); color: #fff; padding: 6px; font-size: 0.85rem; font-weight: 600; }
+.pic .choose { display: grid; gap: 6px; margin-top: 10px; }
+.pic .choose button { border: 1.5px solid var(--ink); background: #fff; border-radius: 999px; padding: 8px 12px; font-size: 0.9rem; font-weight: 500; }
+.pic .choose button:hover:not(:disabled) { background: var(--paper); }
+.pic .choose button[aria-pressed="true"] { background: var(--ink); color: #fff; }
+.pic .choose button:disabled { cursor: default; }
+.pic .choose button.wrong[aria-pressed="true"] { background: var(--bad); border-color: var(--bad); }
+.pic .choose button.right[aria-pressed="true"] { background: var(--good); border-color: var(--good); }
+.both { margin-top: 16px; }
+.both:disabled { opacity: 0.4; cursor: default; }
+.both:disabled:hover { background: transparent; color: var(--ink); }
+#gate-out { margin-top: 22px; display: none; }
+#gate-out.show { display: block; animation: rise 0.4s both; }
+.payout { display: grid; gap: 6px; margin: 16px 0 0; padding: 0; list-style: none; font-size: 0.95rem; }
+.payout li { display: flex; justify-content: space-between; padding: 8px 12px; border-radius: 10px; background: var(--paper); }
+.payout li.you { background: var(--ink); color: #fff; }
+.payout li b { font-variant-numeric: tabular-nums; }
+
+.score-num { font: 800 clamp(3.2rem, 7vw, 5.5rem)/1 var(--display); font-variant-numeric: tabular-nums; }
+.seg { display: inline-flex; border: 1.5px solid var(--ink); border-radius: 14px; overflow: hidden; flex-wrap: wrap; }
+.seg button { border: 0; background: none; padding: 8px 15px; font-size: 0.92rem; font-weight: 500; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: #fff; }
+label.sl { display: block; margin: 22px 0 6px; font-weight: 600; }
+input[type="range"] { width: 100%; accent-color: var(--workup); }
+.curve { width: 100%; height: auto; margin-top: 14px; }
+.floor { margin-top: 26px; display: grid; gap: 8px; }
+.floor div { display: grid; grid-template-columns: 90px 1fr auto; gap: 12px; align-items: center; font-size: 0.93rem; padding: 9px 12px; background: var(--paper); border-radius: 10px; }
+.floor div.lift { background: color-mix(in srgb, var(--conclude) 12%, #fff); font-weight: 600; }
+
+.bars { display: grid; gap: 14px; margin-top: 24px; }
+.bar { display: grid; grid-template-columns: 228px 1fr 64px; gap: 14px; align-items: center; font-size: 0.97rem; }
+.bar i { display: block; height: 30px; background: var(--paper); border-radius: 6px; overflow: hidden; }
+.bar i u { display: block; height: 100%; background: var(--muted); transform-origin: left; transform: scaleX(0); transition: transform 0.6s cubic-bezier(0.3, 0, 0.2, 1); }
+.bar.ours { font-weight: 600; }
+.bar.ours i u { background: var(--workup); }
+.bar b { font-variant-numeric: tabular-nums; text-align: right; }
+.cap { font-size: 0.9rem; color: var(--muted); margin-top: 18px; }
+
+.bars .bar.stage i u { background: color-mix(in srgb, var(--workup) 45%, #fff); }
+.ladder { width: 100%; border-collapse: collapse; margin-top: 28px; font-size: 0.95rem; }
+.ladder th { text-align: right; font-weight: 600; font-size: 0.82rem; color: var(--muted); padding: 0 0 8px 12px; }
+.ladder th:first-child { text-align: left; padding-left: 0; }
+.ladder td { padding: 10px 0 10px 12px; border-top: 1px solid var(--line); text-align: right; font-variant-numeric: tabular-nums; }
+.ladder td:first-child { text-align: left; padding-left: 0; }
+.ladder td:last-child { font-weight: 700; color: var(--workup); }
+pre.bib { background: var(--ink); color: #e9f1f4; padding: 20px; border-radius: 14px; overflow: auto; font: 0.85rem/1.5 var(--mono); }
+footer { padding: 40px 0 60px; font-size: 0.88rem; color: var(--muted); border-top: 1px solid var(--line); }
+footer p { max-width: 90ch; }
+
+dialog { border: 0; padding: 0; background: #0c151a; border-radius: 14px; max-width: min(92vw, 1000px); }
+dialog::backdrop { background: rgba(12, 21, 26, 0.8); }
+dialog img { max-height: 82vh; width: auto; margin: auto; }
+dialog form { display: flex; justify-content: space-between; align-items: center; color: #fff; padding: 10px 14px; font-size: 0.9rem; gap: 16px; }
+dialog button { background: #fff; border: 0; border-radius: 999px; padding: 6px 14px; font-weight: 600; color: var(--ink); }
+
+@media (max-width: 960px) {
+  .hero, .two { grid-template-columns: minmax(0, 1fr); gap: 32px; }
+  .phases { grid-template-columns: 1fr 1fr; row-gap: 18px; }
+  .player { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; height: auto; min-height: 0; margin-inline: -12px; border-radius: 18px; overflow: visible; }
+  .p-head { padding: 10px 14px; gap: 10px; }
+  .rail button { width: 12px; height: 12px; }
+  .faces { grid-template-columns: 1fr 1fr; padding: 10px 12px 0; gap: 8px; }
+  .face { gap: 8px; }
+  .face svg { width: 62px; height: 72px; }
+  .face .tag { font-size: 0.7rem; padding-bottom: 6px; }
+  .face .tag small { display: none; }
+  .sys { grid-column: 1 / -1; width: auto; padding: 6px 0 8px; }
+  .tiles { grid-template-columns: repeat(6, 1fr); }
+  .tile span, .sys b { display: none; }
+  .thread { flex: none; height: 54vh; padding: 4px 12px 18px; }
+  .row { max-width: 94%; }
+  .doc.slip { width: 92%; }
+  .thumbs { grid-template-columns: repeat(2, 1fr); }
+  .side { border-left: 0; border-top: 1px solid var(--line); overflow: visible; padding: 16px 14px; }
+  .p-foot { position: sticky; bottom: 0; z-index: 5; padding: 10px 12px; border-radius: 0 0 18px 18px; }
+  .nav-btn { padding: 11px 12px; font-size: 0.84rem; white-space: nowrap; }
+  #play { padding: 8px 12px; white-space: nowrap; }
+  .p-mid span { display: none; }
+  .panel { min-width: 0; padding: 20px; }
+  .floor div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .bar { grid-template-columns: 1fr 60px; }
+  .bar i { grid-column: 1 / -1; grid-row: 2; height: 18px; }
+  .top nav { display: none; }
+  section.block { padding: 64px 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+
+<header class="wrap top">
+  <a class="brand" href="#">TrustMed-RL</a>
+  <nav aria-label="Sections">
+    <a href="#consultation">The consultation</a>
+    <a href="#gate">Evidence check</a>
+    <a href="#scoring">Scoring</a>
+    <a href="#results">Results</a>
+    <a href="#workup">Workup ability</a>
+  </nav>
+</header>
+
+<main>
+<div class="wrap">
+  <section class="hero">
+    <div>
+      <h1>A doctor agent that checks its evidence before it diagnoses</h1>
+      <p class="sub">TrustMed-RL turns a published case report into a full consultation. The agent interviews a patient, examines, orders tests, verifies the images belong to this patient, and only then commits.</p>
+      <p class="byline" id="byline"></p>
+      <div class="links">
+        <a class="btn" href="#" id="paper-link">Paper (arXiv)</a>
+        <a class="btn" href="https://github.com/Trustmed-RL/TrustMed-RL"><svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>Code</a>
+        <a class="btn" href="https://huggingface.co/Trustmed-RL"><svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M1.4446 11.5059c0 1.1021.1673 2.1585.4847 3.1563-.0378-.0028-.0691-.0058-.1058-.0058-.4209 0-.8015.16-1.0704.4512-.3454.3737-.4984.8335-.4316 1.293a1.576 1.576 0 0 0 .2148.5978c-.2319.1864-.4018.4456-.4844.7578-.0646.2448-.131.7543.2149 1.2794a1.4552 1.4552 0 0 0-.0625.1055c-.208.3923-.2207.8372-.0371 1.25.2783.6258.9696 1.1175 2.3126 1.6467.8356.3292 1.5988.5411 1.6056.543 1.1046.2847 2.104.4277 2.969.4277 1.4173 0 2.4754-.3849 3.1525-1.1446 1.538.2651 2.791.1403 3.592.006.6773.7555 1.7332 1.1387 3.1467 1.1387.8649 0 1.8643-.143 2.969-.4278.0068-.0019.77-.2138 1.6056-.543 1.343-.5292 2.0343-1.0208 2.3126-1.6466.1836-.4129.171-.8577-.037-1.25a1.4685 1.4685 0 0 0-.0626-.1056c.346-.525.2795-1.0346.2149-1.2793-.0826-.3122-.2525-.5714-.4844-.7579.11-.1816.1831-.3788.2148-.5977.0669-.4595-.0862-.9193-.4316-1.293-.2688-.2913-.6495-.4513-1.0704-.4513-.0209 0-.0376.0008-.0588.0018.3162-.9966.4846-2.0518.4846-3.1523 0-5.807-4.7362-10.5144-10.5789-10.5144-5.8426 0-10.5788 4.7073-10.5788 10.5144Zm10.5788-9.4831c5.2727 0 9.5476 4.246 9.5476 9.483a9.4201 9.4201 0 0 1-.2696 2.2365c-.0039-.0047-.0079-.011-.0117-.0156-.274-.3255-.6679-.5059-1.1075-.5059-.352 0-.714.1155-1.0763.3438-.2403.1517-.5058.422-.7793.7598-.2534-.3492-.608-.5832-1.0137-.6465a1.5174 1.5174 0 0 0-.2344-.0176c-.9263 0-1.4828.7993-1.6935 1.5177-.1046.2426-.6065 1.3482-1.3614 2.0978-1.1681 1.1601-1.4458 2.3534-.8396 3.6382-.843.1029-1.5836.0927-2.365-.006.5906-1.212.3626-2.4388-.8426-3.6322-.755-.7496-1.2568-1.8552-1.3614-2.0978-.2107-.7184-.7673-1.5177-1.6935-1.5177-.078 0-.1568.0054-.2344.0176-.4057.0633-.7604.2973-1.0137.6465-.2735-.3379-.539-.6081-.7794-.7598-.3622-.2283-.7243-.3438-1.0762-.3438-.4266 0-.8094.171-1.0821.4786a9.4208 9.4208 0 0 1-.2598-2.1936c0-5.237 4.2749-9.483 9.5475-9.483zM8.6443 7.0036c-.4838.0043-.9503.2667-1.1934.7227-.3536.6633-.1006 1.4873.5645 1.84.351.1862.4883-.5261.836-.6485.3107-.1095.841.399 1.0078.086.3536-.6634.1025-1.4874-.5625-1.84a1.3659 1.3659 0 0 0-.6524-.1602Zm6.8403 0c-.2199-.002-.4426.05-.6504.1602-.665.3526-.9181 1.1766-.5645 1.84.1669.313.6971-.1955 1.0079-.086.3476.1224.4867.8347.838.6485.6649-.3527.916-1.1767.5624-1.84-.243-.456-.7096-.7184-1.1934-.7227Zm-9.7565 1.418a.8768.8768 0 0 0-.877.877c0 .4846.3925.877.877.877a.8768.8768 0 0 0 .877-.877.8768.8768 0 0 0-.877-.877zm12.6434 0c-.4845 0-.879.3925-.879.877 0 .4846.3945.877.879.877a.8768.8768 0 0 0 .877-.877.8768.8768 0 0 0-.877-.877zM8.7927 11.459c-.179-.003-.2793.1107-.2793.416 0 .8097.3874 2.125 1.4279 2.924.207-.7123 1.3453-1.2832 1.5079-1.2012.2315.1167.2191.4417.6074.7266.3884-.285.374-.6098.6056-.7266.1627-.082 1.3009.4889 1.5079 1.2012 1.0404-.799 1.4278-2.1144 1.4278-2.924 0-1.2212-1.583.6402-3.5413.6485-1.4686-.0061-2.7266-1.0558-3.2639-1.0645zM4.312 14.4768c.5792.365 1.6964 2.2751 2.1056 3.0177.1371.2488.371.3536.582.3536.4188 0 .7465-.4138.0391-.9395-1.0636-.791-.6914-2.0846-.1836-2.1642a.4302.4302 0 0 1 .0664-.004c.4616 0 .666.7892.666.7892s.5959 1.4898 1.6213 2.508c.942.9356 1.062 1.703.4961 2.6661-.0164-.004-.0159.0236-.1484.2149-.1853.2673-.4322.4688-.7188.6152-.5062.2269-1.1397.2696-1.7833.2696-1.037 0-2.1017-.1824-2.6975-.336-.0293-.0075-3.6505-.9567-3.1916-1.8224.0771-.1454.2033-.2031.3633-.2031.6463 0 1.823.9551 2.3283.9551.113 0 .196-.0865.2285-.2031.2249-.8045-3.2787-1.0522-2.9846-2.1642.0519-.1967.193-.2757.3907-.2754.854 0 2.7704 1.4923 3.172 1.4923.0307 0 .0525-.0085.0645-.0274.2012-.3227.1096-.5865-1.3087-1.4395-1.4182-.8533-2.4315-1.329-1.8653-1.9416.0651-.0707.1574-.1015.2695-.1015.8611.0002 2.8948 1.84 2.8948 1.84s.5487.5683.8809.5683c.0762 0 .1416-.0315.1855-.1054.2355-.3946-2.1858-2.2183-2.3224-2.971-.0926-.51.0641-.7676.3555-.7676-.0006.008.1701-.0285.4942.1759zm16.2257.5918c-.1366.7526-2.5579 2.5764-2.3224 2.9709.044.074.1092.1055.1855.1055.3321 0 .881-.5684.881-.5684s2.0336-1.8397 2.8947-1.84c.1121 0 .2044.0308.2695.1016.5662.6125-.447 1.0882-1.8653 1.9415-1.4183.853-1.51 1.1168-1.3087 1.4396.012.0188.0337.0273.0644.0273.4016 0 2.3181-1.4923 3.1721-1.4923.1977-.0002.3388.0787.3907.2754.294 1.112-3.2095 1.3597-2.9846 2.1642.0325.1166.1156.2032.2285.2032.5054 0 1.682-.9552 2.3283-.9552.16 0 .2862.0577.3633.2032.459.8656-3.1623 1.8149-3.1916 1.8224-.5958.1535-1.6605.336-2.6975.336-.6351 0-1.261-.0409-1.7638-.2599-.2949-.1472-.5488-.3516-.7383-.625-.0411-.0682-.1026-.1476-.1426-.205-.5726-.9679-.455-1.7371.4903-2.676 1.0254-1.0182 1.6212-2.508 1.6212-2.508s.2044-.7891.666-.7891a.4318.4318 0 0 1 .0665.0039c.5078.0796.88 1.3732-.1836 2.1642-.7074.5257-.3797.9395.039.9395.211 0 .445-.1047.5821-.3535.4092-.7426 1.5264-2.6527 2.1056-3.0178.5588-.3524.99-.1816.8497.5918z"/></svg>Dataset</a>
+      </div>
+    </div>
+    <div class="room" data-phase="history">
+      <div class="who">A patient walks in and says</div>
+      <blockquote id="opening-line"></blockquote>
+      <div class="ask">
+        <a class="btn solid" href="#consultation">Start the consultation</a>
+        <span>A real episode, 16 turns, replayed as it happened.</span>
+      </div>
+    </div>
+  </section>
+
+  <div class="phases" id="phases">
+    <button data-phase="history" data-jump="1"><strong>History</strong><span>Up to 10 questions. The patient only knows what the case report says.</span></button>
+    <button data-phase="workup" data-jump="6"><strong>Workup</strong><span>Examine, order tests, consult a specialist, search the literature.</span></button>
+    <button data-phase="gate" data-jump="8"><strong>Evidence check</strong><span>Every returned image is verified against the order before anyone reads it.</span></button>
+    <button data-phase="conclude" data-jump="16"><strong>Decision</strong><span>Name one diagnosis, or hand the case to a human.</span></button>
+  </div>
+</div>
+
+<section class="wrap" id="consultation">
+  <h2>One consultation, turn by turn</h2>
+  <p class="lede">Click <b>Next turn</b> to move through the consultation one step at a time, go back with <b>Previous turn</b>, or press Play. The conversation and the investigation build up on the left as they happened; the agent’s reasoning and its competing diagnoses are on the right. Nothing here is scripted: it is one evaluation episode from the held-out test set.</p>
+
+  <div class="player" id="player" data-phase="history">
+    <div class="p-head">
+      <div class="where" id="where">History</div>
+      <div class="rail" id="rail" role="group" aria-label="Jump to a turn"></div>
+    </div>
+    <div class="clinic">
+      <div class="faces" id="faces"></div>
+      <div class="thread" id="thread" aria-live="polite"></div>
+    </div>
+    <aside class="side" aria-label="What the doctor agent is thinking">
+      <div id="side-top"></div>
+      <div class="ddx" id="ddx" aria-live="polite"></div>
+      <div class="meters" id="meters"></div>
+    </aside>
+    <div class="p-foot">
+      <button class="nav-btn prev" id="prev">← Previous turn</button>
+      <div class="p-mid"><button id="play" aria-pressed="false">▶ Play</button><span id="count"></span></div>
+      <button class="nav-btn next" id="next">Next turn →</button>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="gate" data-phase="gate">
+  <div class="wrap two">
+    <div>
+      <h2>Would you catch it?</h2>
+      <p class="lede">In some episodes the environment quietly swaps one returned image for a picture from a different patient. The agent has to notice before it reads anything into it.</p>
+      <p style="margin-top:18px">This is a real test episode. A chest CT was ordered and two images came back. For each image, say whether it matches the order, then submit your verdict. Click an image to enlarge it.</p>
+    </div>
+    <div class="panel">
+      <div class="order" id="gate-order"></div>
+      <div class="pick" id="gate-pick"></div>
+      <button class="btn solid both" id="gate-both" disabled>Submit your verdict</button>
+      <div id="gate-out"></div>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="scoring" data-phase="conclude">
+  <div class="wrap two">
+    <div>
+      <h2>A right answer is worth what the evidence behind it is worth</h2>
+      <p class="lede">The reward for a diagnosis is scaled by how much of the available evidence the agent actually obtained and verified. Guessing early is cheap to try and pays almost nothing.</p>
+      <p style="margin-top:18px">Drag the slider to see what the same correct diagnosis earns at different levels of evidence.</p>
+    </div>
+    <div class="panel">
+      <div class="seg" id="match" role="group" aria-label="How closely the diagnosis matches">
+        <button data-w="1" aria-pressed="true">Exact match</button>
+        <button data-w="0.85" aria-pressed="false">Same core disease</button>
+        <button data-w="0.5" aria-pressed="false">Partial</button>
+      </div>
+      <label class="sl" for="cov">Evidence obtained: <span id="cov-out">50%</span></label>
+      <input type="range" id="cov" min="0" max="100" value="50">
+      <div class="score-num" id="score">0.74</div>
+      <p class="note" id="score-note"></p>
+      <svg class="curve" viewBox="0 0 400 120" aria-hidden="true">
+        <path d="M0 110 H400" stroke="#d2dbe1" stroke-width="1"/>
+        <path id="curve-path" fill="none" stroke="#0d756d" stroke-width="3"/>
+        <circle id="curve-dot" r="6" fill="#13232c"/>
+      </svg>
+      <h3 style="font-size:1.2rem;margin-top:30px">In the episode above</h3>
+      <p class="note" id="floor-note" style="margin-top:6px"></p>
+      <div class="floor" id="floor"></div>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="results" data-phase="workup">
+  <div class="wrap two">
+    <div>
+      <h2>How it compares</h2>
+      <p class="lede">An 8-billion-parameter open model trained with reinforcement learning in this environment, next to its own untrained and supervised-only versions, three larger open models, and two proprietary ones.</p>
+    </div>
+    <div class="panel">
+      <div class="seg" id="metric" role="group" aria-label="Metric"></div>
+      <div class="bars" id="bars"></div>
+      <p class="cap" id="metric-cap"></p>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="workup" data-phase="workup">
+  <div class="wrap two">
+    <div>
+      <h2>Training changes how the agent works a case up</h2>
+      <p class="lede">The gain is not only in the final answer. The same 8B model goes from barely investigating to running a full workup: more tests, more verified images, more consults, more searches, and far fewer cases abandoned without a diagnosis.</p>
+      <table class="ladder" id="ladder"></table>
+    </div>
+    <div class="panel">
+      <div class="seg" id="wmetric" role="group" aria-label="Workup metric"></div>
+      <div class="bars" id="wbars"></div>
+      <p class="cap" id="wmetric-cap"></p>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="cite">
+  <div class="wrap">
+    <h2>Cite</h2>
+    <pre class="bib" id="bib" style="margin-top:24px"></pre>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p id="credits"></p>
+    <p>Research demonstration only. Not a medical device and not medical advice.</p>
+  </div>
+</footer>
+
+<dialog id="zoom"><figure style="margin:0"></figure><form method="dialog"><span></span><button>Close</button></form></dialog>
+
+<script src="data.js"></script>
+<script>
+(function () {
+  "use strict";
+  var D = window.TRUSTMED, E = D.episode, SW = D.swap;
+  var $ = function (s, r) { return (r || document).querySelector(s); };
+  var esc = function (s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  };
+  var reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---------- hero: type the patient's opening line ---------- */
+  (function () {
+    var el = $("#opening-line"), text = "“" + E.opening.answer + "”", i = 0;
+    if (reduced) { el.textContent = text; return; }
+    el.innerHTML = '<span></span><i class="caret"></i>';
+    var span = el.firstChild;
+    var t = setInterval(function () {
+      span.textContent = text.slice(0, ++i);
+      if (i >= text.length) { clearInterval(t); el.lastChild.remove(); }
+    }, 28);
+  })();
+
+  /* ---------- steps model ---------- */
+  var TITLES = {
+    opening: "The patient speaks first",
+    ask: "Asks the patient",
+    begin_workup: "Closes the interview",
+    physical_examination: "Examines the patient",
+    order_tests: "Orders tests",
+    gate_verdict: "Checks the images belong to this patient",
+    consult_specialist: "Asks a specialist to read them",
+    search: "Searches the literature",
+    final_diagnosis: "Commits to a diagnosis"
+  };
+  var PHASE_NAME = { history: "History", workup: "Workup", gate: "Evidence check", conclude: "Decision" };
+  var STATION_OF = {
+    opening: "patient", ask: "patient", begin_workup: "patient", physical_examination: "exam",
+    order_tests: "tests", gate_verdict: "gate", consult_specialist: "specialist",
+    search: "search", final_diagnosis: "decision"
+  };
+  var steps = [{ n: 0, phase: "history", verb: "opening", patient: E.opening }].concat(E.turns);
+  steps.forEach(function (s) { if (s.verb === "final_diagnosis") s.phase = "conclude"; });
+  var N = E.turns.length;
+
+  var known = { "DEM-01": 1 }, asks = 0, work = 0, searches = 0;
+  steps.forEach(function (s) {
+    s.fresh = [];
+    if (s.patient) s.patient.used_fact_ids.forEach(function (id) { if (!known[id]) { known[id] = 1; s.fresh.push(id); } });
+    if (s.verb === "ask") asks++;
+    if (/physical_examination|order_tests|consult_specialist|search/.test(s.verb)) work++;
+    if (s.verb === "search") searches++;
+    s.totals = { asks: asks, work: work, searches: searches, facts: Object.keys(known).length };
+  });
+  var FACT = {}; E.facts.forEach(function (f) { FACT[f.fact_id] = f.atomic_fact; });
+  function cap(t) { return t.charAt(0).toUpperCase() + t.slice(1); }
+
+  function actionText(s) {
+    if (s.verb === "opening") return null;
+    var verb = s.verb === "defer_to_human" ? "abstention" : s.verb;
+    var p = Array.isArray(s.payload) ? s.payload.join(", ") : (s.payload || "");
+    return "<b>&lt;action&gt;</b>" + esc(verb) + (p ? ": " + esc(p) : "") + "<b>&lt;/action&gt;</b>";
+  }
+  function blurb(s) {
+    switch (s.verb) {
+      case "opening": return "The simulated patient opens with at most two facts from the case report. Everything else has to be asked for.";
+      case "ask": return s.fresh.length
+        ? "The answer adds " + s.fresh.length + " new fact" + (s.fresh.length > 1 ? "s" : "") + " to the chart."
+        : "The patient does not know. In this environment “I don’t know” is final, and it is not the same as “no”.";
+      case "begin_workup": return "Three questions in a row brought nothing new, so the agent stops asking. The interview cannot be reopened.";
+      case "physical_examination": return "Findings come straight from the case record. One of them is abnormal.";
+      case "order_tests": {
+        var imgs = s.results.filter(function (r) { return r.img; }).length;
+        return imgs ? imgs + " images come back. Their written reports stay locked until the images pass the evidence check."
+          : "The case record has no such study, so the agent gets nothing and still spends a turn.";
+      }
+      case "gate_verdict": return "A forced turn. For each image the agent states the modality and body site it sees, then compares them with what it ordered.";
+      case "consult_specialist": return "Only now is the written report released, and only for images that passed the check.";
+      case "search": return "A plain-language question to a local index of PubMed, StatPearls and textbooks. The patient’s own case report is excluded.";
+      case "final_diagnosis": return "One disease, named once. Then the judges score it.";
+    }
+    return "";
+  }
+
+  /* ---------- portraits ---------- */
+  function eyes(iris, lid, skin) {
+    return [47, 73].map(function (x) {
+      return '<ellipse cx="' + x + '" cy="59" rx="6.2" ry="4.2" fill="#fff"/>' +
+        '<circle cx="' + x + '" cy="59.4" r="2.9" fill="' + iris + '"/><circle cx="' + x + '" cy="59.4" r="1.3" fill="#13232c"/>' +
+        '<circle cx="' + (x + 1) + '" cy="58.3" r="0.7" fill="#fff"/>' +
+        '<path d="M' + (x - 6.6) + ' 57.6 q6.6 -5.6 13.2 0" fill="none" stroke="' + lid + '" stroke-width="1.7" stroke-linecap="round"/>' +
+        '<ellipse class="blink" cx="' + x + '" cy="59" rx="7" ry="5" fill="' + skin + '"/>';
+    }).join("");
+  }
+  function face(kind, crop) {
+    var open = '<svg viewBox="' + (crop ? "22 8 76 87" : "0 0 120 140") + '" aria-hidden="true">';
+    if (kind === "pt") return open +
+      // hospital gown
+      '<path d="M6 140 C8 113 28 103 46 98 L74 98 C92 103 112 113 114 140 Z" fill="#c9dbe6"/>' +
+      '<path d="M46 98 L60 114 L74 98" fill="none" stroke="#9ab4c4" stroke-width="3" stroke-linejoin="round"/>' +
+      '<g fill="#9ab4c4"><circle cx="30" cy="122" r="1.6"/><circle cx="44" cy="130" r="1.6"/><circle cx="76" cy="124" r="1.6"/><circle cx="92" cy="132" r="1.6"/><circle cx="60" cy="130" r="1.6"/></g>' +
+      // neck, ears, head
+      '<path d="M48 82 H72 V100 Q60 110 48 100 Z" fill="#dcab8c"/><path d="M48 92 Q60 100 72 92 V96 Q60 104 48 96 Z" fill="#c9977a" opacity="0.6"/>' +
+      '<ellipse cx="28" cy="62" rx="5" ry="9" fill="#e3b092"/><ellipse cx="92" cy="62" rx="5" ry="9" fill="#e3b092"/>' +
+      '<path d="M30 54 C30 28 44 15 60 15 C76 15 90 28 90 54 C90 80 77 97 60 97 C43 97 30 80 30 54 Z" fill="#edc3a6"/>' +
+      // greying, receding hair
+      '<path d="M30 54 C26 30 41 12 60 12 C79 12 94 30 90 54 C88 42 84 34 78 30 C70 24 50 24 42 30 C36 34 32 42 30 54 Z" fill="#8d9296"/>' +
+      '<path d="M30 54 C29 46 31 40 34 36 M90 54 C91 46 89 40 86 36" stroke="#a6abae" stroke-width="2" fill="none"/>' +
+      // forehead lines, brows drawn together
+      '<path d="M46 36 Q60 32 74 36 M48 42 Q60 39 72 42" stroke="#d6a487" stroke-width="1.2" fill="none" stroke-linecap="round"/>' +
+      '<path d="M39 51 Q46 46 54 50" stroke="#7a7f83" stroke-width="3.2" fill="none" stroke-linecap="round"/><path d="M81 51 Q74 46 66 50" stroke="#7a7f83" stroke-width="3.2" fill="none" stroke-linecap="round"/>' +
+      '<path d="M57 48 V53 M63 48 V53" stroke="#d6a487" stroke-width="1.1"/>' +
+      eyes("#5d7f8f", "#c3907a", "#edc3a6") +
+      '<path d="M41 66 Q47 69 53 66 M67 66 Q73 69 79 66" stroke="#d6a487" stroke-width="1.3" fill="none" stroke-linecap="round"/>' +
+      // nose, folds, stubble, mouth
+      '<path d="M60 57 Q55 70 57 73 Q60 76 64 73" stroke="#c3907a" stroke-width="2" fill="none" stroke-linecap="round"/>' +
+      '<path d="M50 73 Q47 79 49 84 M70 73 Q73 79 71 84" stroke="#d6a487" stroke-width="1.2" fill="none" stroke-linecap="round"/>' +
+      '<path d="M36 70 C40 92 80 92 84 70 C83 86 72 97 60 97 C48 97 37 86 36 70 Z" fill="#9c8f88" opacity="0.28"/>' +
+      '<path d="M51 83 Q60 80 69 83" stroke="#9a5547" stroke-width="2.3" fill="none" stroke-linecap="round"/>' +
+      '<ellipse class="mouth-open" cx="60" cy="83.5" rx="6" ry="4" fill="#6f332c"/></svg>';
+    return open +
+      // white coat over scrubs, stethoscope
+      '<path d="M4 140 C6 113 28 103 46 98 L74 98 C92 103 114 113 116 140 Z" fill="#fff" stroke="#c4cfd6" stroke-width="2"/>' +
+      '<path d="M46 98 L60 122 L74 98 Z" fill="#0d756d"/>' +
+      '<path d="M46 98 L52 128 M74 98 L68 128" stroke="#c4cfd6" stroke-width="2" fill="none"/>' +
+      '<path d="M40 101 C33 118 40 132 52 133 M80 101 C87 117 84 127 77 129" stroke="#33454f" stroke-width="3" fill="none" stroke-linecap="round"/>' +
+      '<circle cx="74" cy="131" r="5.5" fill="#9aa9b2" stroke="#33454f" stroke-width="2"/>' +
+      // hair behind, neck, ears, head
+      '<circle cx="60" cy="12" r="10" fill="#1f1a19"/>' +
+      '<path d="M27 58 C22 26 42 9 60 9 C78 9 98 26 93 58 C93 72 90 80 87 86 L33 86 C30 80 27 72 27 58 Z" fill="#1f1a19"/>' +
+      '<path d="M49 82 H71 V100 Q60 109 49 100 Z" fill="#b07b56"/><path d="M49 92 Q60 99 71 92 V96 Q60 103 49 96 Z" fill="#96654a" opacity="0.6"/>' +
+      '<ellipse cx="30" cy="62" rx="4.5" ry="8" fill="#bb855f"/><ellipse cx="90" cy="62" rx="4.5" ry="8" fill="#bb855f"/>' +
+      '<path d="M32 54 C32 30 45 19 60 19 C75 19 88 30 88 54 C88 78 76 95 60 95 C44 95 32 78 32 54 Z" fill="#c9926c"/>' +
+      // side-swept fringe
+      '<path d="M32 54 C29 32 44 17 62 17 C79 17 91 31 88 54 C85 42 78 33 68 30 C56 36 42 42 32 54 Z" fill="#1f1a19"/>' +
+      '<path d="M40 51 Q47 47.5 54 50" stroke="#2a211f" stroke-width="2.6" fill="none" stroke-linecap="round"/><path d="M80 51 Q73 47.5 66 50" stroke="#2a211f" stroke-width="2.6" fill="none" stroke-linecap="round"/>' +
+      eyes("#5b3a22", "#8f5f44", "#c9926c") +
+      // glasses
+      '<g fill="none" stroke="#33454f" stroke-width="1.8"><rect x="37.5" y="52" width="19" height="14" rx="5"/><rect x="63.5" y="52" width="19" height="14" rx="5"/><path d="M56.5 58 Q60 56 63.5 58 M37.5 57 L31 55 M82.5 57 L89 55"/></g>' +
+      '<path d="M60 58 Q56 70 58 73 Q60 75 63 73" stroke="#a36f4e" stroke-width="2" fill="none" stroke-linecap="round"/>' +
+      '<path d="M44 72 Q47 75 46 78 M76 72 Q73 75 74 78" stroke="#b9805c" stroke-width="1.1" fill="none" stroke-linecap="round"/>' +
+      '<path d="M51 81 Q60 86 69 81" stroke="#8a3d3a" stroke-width="2.4" fill="none" stroke-linecap="round"/>' +
+      '<ellipse class="mouth-open" cx="60" cy="83" rx="5.5" ry="3.8" fill="#6f2c2c"/></svg>';
+  }
+  var AV = { pt: face("pt", true), dr: face("dr", true) };
+
+  var TOOLS = [
+    { k: "exam", label: "Exam", phase: "workup", ico: "M2 12 H8 L10.5 5 L14.5 19 L17 12 H22" },
+    { k: "tests", label: "Tests", phase: "workup", ico: "M9 3 V10 L4 20 H20 L15 10 V3 M7.5 3 H16.5" },
+    { k: "gate", label: "Evidence check", phase: "gate", ico: "M12 2 L20 5.5 V12 C20 17 16.5 20 12 22 C7.5 20 4 17 4 12 V5.5 Z M8.5 12 L11 14.5 L15.5 9" },
+    { k: "specialist", label: "Specialist", phase: "workup", ico: "M6 3 H18 V21 H6 Z M9 8 H15 M9 12 H15 M9 16 H13" },
+    { k: "search", label: "Literature", phase: "workup", ico: "M10.5 10.5 m-6.5 0 a6.5 6.5 0 1 0 13 0 a6.5 6.5 0 1 0 -13 0 M15.5 15.5 L21 21" },
+    { k: "decision", label: "Diagnosis", phase: "conclude", ico: "M6 22 V3 M6 4 H19 L15.5 8.5 L19 13 H6" }
+  ];
+  var SAY = '<span class="say"><i></i><i></i><i></i></span>';
+  $("#faces").innerHTML =
+    '<div class="face pt" id="a-pt">' + face("pt") + '<div class="tag"><b>Patient</b><small>53-year-old man, simulated from the case report</small><br>' + SAY + "</div></div>" +
+    '<div class="face dr" id="a-dr">' + face("dr") + '<div class="tag"><b>Doctor agent</b><small>the AI model being trained</small><br>' + SAY + "</div></div>" +
+    '<div class="sys"><div class="tiles">' + TOOLS.map(function (t) {
+      return '<div class="tile" id="tile-' + t.k + '" data-phase="' + t.phase + '"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="' + t.ico + '"/></svg><span>' + t.label + "</span><em hidden></em></div>";
+    }).join("") + '</div><b>Clinic system</b><small id="sys-note"></small></div>';
+
+  function drawFaces(s, i) {
+    var key = STATION_OF[s.verb], withPt = key === "patient", counts = {}, closed = false;
+    for (var k = 0; k <= i; k++) {
+      counts[STATION_OF[steps[k].verb]] = (counts[STATION_OF[steps[k].verb]] || 0) + 1;
+      if (steps[k].verb === "begin_workup" && k < i) closed = true;
+    }
+    var pt = $("#a-pt"), dr = $("#a-dr");
+    pt.className = "face pt"; dr.className = "face dr";
+    void pt.offsetWidth;                       // restart the speaking animations
+    pt.style.setProperty("--d", s.verb === "opening" ? "0.1s" : "1s");
+    pt.className = "face pt" + (closed ? " away" : "") + (s.patient ? " speaking" : "");
+    dr.className = "face dr " + (withPt ? "to-pt" : "to-sys") + (s.verb !== "opening" ? " speaking" : "");
+    pt.querySelector("small").textContent = closed ? "interview closed" : "53-year-old man, simulated from the case report";
+    TOOLS.forEach(function (t) {
+      var el = $("#tile-" + t.k), n = counts[t.k] || 0, em = el.querySelector("em");
+      el.className = "tile" + (n ? " used" : "") + (t.k === key ? " on" : "");
+      em.hidden = n < 2; em.textContent = n;
+    });
+    $("#sys-note").textContent = s.totals.work ? "request " + s.totals.work + " of up to " + E.budgets.workup : "opens after the interview";
+  }
+
+  /* ---------- the consultation thread ---------- */
+  function thumb(name, cls, caption) {
+    return '<button class="thumb ' + (cls || "") + '" data-zoom="' + esc(E.images[name]) + '" data-cap="' + esc(caption || name) + '">' +
+      '<img src="' + esc(E.images[name]) + '" alt="' + esc(caption || name) + '" loading="lazy"><span>' + esc(name) + "</span></button>";
+  }
+  function chips(s) {
+    var out = s.fresh.map(function (id) { return '<span class="chip new" title="' + esc(id) + '">+ ' + esc(FACT[id] || id) + "</span>"; })
+      .concat(s.patient.unknown_topics.map(function (t) { return '<span class="chip unk">does not know: ' + esc(t) + "</span>"; }));
+    return out.length ? '<div class="chips">' + out.join("") + "</div>" : "";
+  }
+  function lastGateImages(i) {
+    for (var k = i; k >= 0; k--) if (steps[k].gate) return steps[k].gate.images;
+    return [];
+  }
+  function sayDr(t) { return '<div class="row dr"><div class="av">' + AV.dr + '</div><div class="bubble">' + esc(t) + "</div></div>"; }
+  function sayPt(s) { return '<div class="row pt"><div class="av">' + AV.pt + '</div><div><div class="bubble">' + esc(s.patient.answer) + "</div>" + chips(s) + "</div></div>"; }
+  function doc(cls, title, from, body, phase) {
+    return '<div class="doc ' + cls + '" data-phase="' + phase + '"><header><b>' + esc(title) + "</b><span>" + esc(from) + '</span></header><div class="body">' + body + "</div></div>";
+  }
+  function slip(title, items, text) {
+    return doc("slip", title, "from the doctor agent", text ? "<p>" + esc(text) + "</p>" : "<ul>" + items.map(function (x) { return "<li>" + esc(x) + "</li>"; }).join("") + "</ul>", "workup");
+  }
+  function resultRows(rows, hideCat) {
+    return '<table class="rows">' + rows.map(function (r) {
+      var na = /not available/i.test(r.text || "");
+      var val = r.img ? "Image " + r.img + " attached" : esc(r.text);
+      val = na ? '<span class="na">' + val + "</span>" : val;
+      if (hideCat) return "<tr><td>" + esc(r.name) + "</td><td>" + val + "</td></tr>";
+      return "<tr><td>" + esc(r.cat) + "</td><td>" + (r.name ? "<b>" + esc(r.name) + "</b><br>" : "") + val + "</td></tr>";
+    }).join("") + "</table>";
+  }
+  // One action can carry several orders. Show them one at a time, each followed by what came back for it.
+  function oneByOne(s, orderWord, resultWord) {
+    var out = [], n = s.payload.length, t = 0, used = {};
+    s.payload.forEach(function (item, j) {
+      var rows = s.results.filter(function (r, k) { var hit = r.cat === item; if (hit) used[k] = 1; return hit; });
+      var imgs = rows.filter(function (r) { return r.img; });
+      out.push([0, slip(orderWord + " " + (j + 1) + " of " + n, [item]), t]);
+      out.push([0, doc("", resultWord + ": " + cap(item.split("/").pop()), imgs.length ? "images back, reports withheld until verified" : "from the case record",
+        (rows.length && rows.some(function (r) { return r.name; }) ? resultRows(rows, true) : '<span class="na">' + esc(rows.length ? rows[0].text : "Not available in record.") + "</span>") +
+        (imgs.length ? '<div class="thumbs">' + imgs.map(function (r) { return thumb(r.img, "locked", r.name); }).join("") + "</div>" : ""), "workup"), t + 0.7]);
+      t += 1.6;
+    });
+    var rest = s.results.filter(function (r, k) { return !used[k]; });
+    if (rest.length) out.push([0, doc("", resultWord + "s", "from the case record", resultRows(rest), "workup"), t]);
+    return out;
+  }
+  // each item: [stage 1..3, html, optional delay in seconds]; sets when it appears on a new turn
+  function turnItems(s, i) {
+    switch (s.verb) {
+      case "opening": return [[1, sayPt(s)]];
+      case "ask": return [[1, sayDr(s.payload)], [2, sayPt(s)]];
+      case "begin_workup": return [[1, '<div class="sysnote">Interview closed. ' + s.totals.facts + " of " + E.metrics.factsTotal + " facts recovered in " + s.totals.asks + " questions. Examination and tests open now.</div>"]];
+      case "physical_examination":
+        return oneByOne(s, "Examination", "Findings");
+      case "order_tests": {
+        return oneByOne(s, "Test order", "Result");
+      }
+      case "gate_verdict":
+        return [[1, doc("viewer", "Evidence integrity check", "is each image what was ordered, for this patient?",
+                  '<div class="thumbs">' + s.gate.images.map(function (n) { return thumb(n, "ok"); }).join("") + "</div>", "gate")],
+                [2, doc("", "What the agent sees in each image", "the agent’s own reading",
+                  '<table class="rows">' + s.gate.checks.map(function (c) {
+                    return "<tr><td>" + esc(c.img) + "</td><td><b>Modality:</b> " + esc(c.modality) + "<br><b>Site:</b> " + esc(c.site) + "</td></tr>";
+                  }).join("") + '</table><span class="stamp">' + (s.gate.verdict === "pass" ? "PASS" : "MISMATCH") + "</span>" +
+                  '<p class="note">Correct verdict on clean evidence: +' + s.gate.reward.toFixed(1) + " reward. Missing a swap would cost 2.0.</p>", "gate")]];
+      case "consult_specialist": {
+        var names = lastGateImages(i);
+        return [[1, slip("Consult request", null, cap(s.payload) + ": please read the verified images.")],
+                [2, doc("", cap(s.payload) + " report", "released after the evidence check", s.report.map(function (line, k) {
+                  return '<div class="report">' + (names[k] ? thumb(names[k], "", line) : "<span></span>") + "<div>" + esc(line) + "</div></div>";
+                }).join(""), "workup")]];
+      }
+      case "search":
+        return [[1, slip("Literature search", null, s.payload)],
+                [2, doc("", "Top passages", "PubMed, StatPearls and textbooks; own case excluded", s.hits.map(function (x) {
+                  return '<div class="hit"><b>' + esc(x.id + ". " + x.title) + "</b><span>" + esc(x.source) + ". " + esc(x.snippet) + "</span></div>";
+                }).join("") + '<p class="note">These passages are off target, and the agent does not let them move its diagnosis.</p>', "workup")]];
+      case "final_diagnosis": {
+        var J = E.judge;
+        return [[1, doc("final", "Final diagnosis", "signed by the doctor agent", '<div class="dx">' + esc(s.payload) + "</div>", "conclude")],
+                [2, '<div class="verdict"><b>Judged: same core disease (' + esc(J.verdict) + "), " + J.reward + " of 1.0 credit.</b><br>" +
+                  "The case report’s label is “" + esc(J.gold) + "”. The agent named a specific tumor inside that family. " +
+                  "The judge model and the disease ontology agree it is the right disease, stated more precisely than the label.</div>"]];
+      }
+    }
+    return [];
+  }
+  var thread = $("#thread");
+  var STAGE = { 1: 0, 2: 1, 3: 1.7 }, lastDelay = 0, followers = [];
+  function drawThread(i) {
+    var h = "";
+    lastDelay = 0;
+    for (var k = 0; k <= i; k++) {
+      var s = steps[k];
+      h += '<section class="turn' + (k === i ? " new" : "") + '" data-phase="' + s.phase + '" id="t-' + k + '">' +
+        '<div class="mark">' + (s.n ? "Turn " + s.n : "The patient arrives") + "</div>" +
+        turnItems(s, k).map(function (it) {
+          var d = it[2] != null ? it[2] : STAGE[it[0]];
+          if (k === i) lastDelay = Math.max(lastDelay, d);
+          return '<div class="it" style="--d:' + d.toFixed(1) + 's">' + it[1] + "</div>";
+        }).join("") + "</section>";
+    }
+    thread.innerHTML = h;
+    var el = $("#t-" + i);
+    thread.scrollTo({ top: Math.max(0, el.offsetTop - 4), behavior: reduced || i === 0 ? "auto" : "smooth" });
+    // follow each order and result into view as it arrives
+    followers.forEach(clearTimeout); followers = [];
+    if (!reduced) [].forEach.call(el.querySelectorAll(".it"), function (it) {
+      var d = parseFloat(it.style.getPropertyValue("--d")) || 0;
+      if (d) followers.push(setTimeout(function () {
+        var bottom = it.offsetTop + it.offsetHeight + 14;
+        if (bottom > thread.scrollTop + thread.clientHeight) thread.scrollTo({ top: bottom - thread.clientHeight, behavior: "smooth" });
+      }, d * 1000));
+    });
+  }
+
+  /* ---------- side panel: the agent's move, your call, competing diagnoses ---------- */
+  var CALLS = {
+    4: {
+      q: "Your call before the next turn",
+      p: "Three questions in a row added nothing. Six are still in the budget. What would you do?",
+      opts: ["Ask another question", "Begin the workup", "Diagnose now"], agent: 1,
+      after: "The agent begins the workup. Press Next turn to watch."
+    },
+    15: {
+      q: "Your call: name the diagnosis",
+      p: "Frontal mass, solid and cystic. Spindle cells in fascicles. CD34 and Bcl-2 positive. Two tests came back empty.",
+      opts: ["Glioblastoma", "Meningioma", "Solitary fibrous tumor", "Frontotemporal dementia"], agent: 2,
+      after: "The agent says solitary fibrous tumor. Press Next turn to see how the judges score it."
+    }
+  };
+  var answered = {};
+  function callHtml(i) {
+    var c = CALLS[i]; if (!c) return "";
+    var a = answered[i], done = a != null;
+    return '<div class="call" data-i="' + i + '"><h4>' + esc(c.q) + "</h4><p>" + esc(c.p) + '</p><div class="opts">' +
+      c.opts.map(function (o, k) {
+        return '<button data-k="' + k + '"' + (done ? " disabled" : "") + ' class="' + (done && k === c.agent ? "same " : "") + (done && k === a ? "picked" : "") + '">' +
+          esc(o) + (done && k === c.agent ? " (the agent’s choice)" : "") + "</button>";
+      }).join("") + "</div>" + (done ? '<p class="after">' + esc(c.after) + "</p>" : "") + "</div>";
+  }
+  var sideTop = $("#side-top");
+  function drawSide(s, i) {
+    var act = actionText(s);
+    sideTop.innerHTML = '<div class="pill">' + (s.n ? "Turn " + s.n + " of " + N : "Before turn 1") + "</div>" +
+      "<h3>" + esc(s.verb === "consult_specialist" ? "Asks " + s.payload + " to read the images" : TITLES[s.verb]) + "</h3>" +
+      (act ? '<code class="action">' + act + "</code>" : "") + "<p>" + esc(blurb(s)) + "</p>" +
+      (s.think ? '<details class="why"><summary>Read the agent’s reasoning for this turn</summary><div>' + esc(s.think) + "</div></details>" : "") +
+      callHtml(i);
+  }
+  sideTop.addEventListener("click", function (e) {
+    var b = e.target.closest(".call .opts button"); if (!b || b.disabled) return;
+    answered[+b.closest(".call").dataset.i] = +b.dataset.k;
+    drawSide(steps[cur], cur);
+  });
+
+  var DX = {
+    ftd: "Frontotemporal dementia", stroke: "Stroke or vascular lesion", mood: "Depression or psychiatric cause",
+    toxic: "Toxic or metabolic cause", tumor: "Frontal lobe tumor (glioma)", mets: "Brain metastasis",
+    lymph: "CNS lymphoma", mening: "Meningioma", sft: "Solitary fibrous tumor", sarcoma: "CNS sarcoma", schw: "Schwannoma"
+  };
+  var DDX = [
+    { r: ["ftd", "stroke", "mood"], why: "A year of behaviour change and frontal headaches. Wide open." },
+    { r: ["tumor", "stroke", "ftd", "toxic"], why: "Apathy, disinhibition, anosognosia: the pattern points at the frontal lobes." },
+    { r: ["tumor", "stroke", "ftd"], why: "The patient cannot say whether there are focal problems. Little moves." },
+    { r: ["tumor", "ftd"], why: "No detail on severity either." },
+    { r: ["tumor", "stroke", "ftd", "mood"], why: "No imaging history the patient knows of. Questions have stopped paying." },
+    { r: ["ftd", "mood", "toxic", "tumor"], why: "With no focal sign on record, the agent leans back toward dementia." },
+    { r: ["tumor", "ftd", "mood", "toxic"], why: "Right plantar reflex in extension. One focal sign puts a mass back on top." },
+    { r: ["tumor", "ftd", "mood", "toxic"], why: "MRI images are back but unread. Nothing can move yet." },
+    { r: ["tumor", "ftd", "stroke", "mood"], why: "Images verified, still unread. The agent asks radiology next." },
+    { r: ["tumor", "mets", "lymph", "mening"], why: "Radiology: large frontal mass, solid and cystic, enhancing. Dementia and mood are out." },
+    { r: ["tumor", "mets", "lymph", "mening"], why: "Pathology slides are back but unread." },
+    { r: ["tumor", "mening", "mets"], why: "Slides verified. The agent still expects a glioma." },
+    { r: ["sft", "sarcoma", "schw", "mets"], why: "Spindle cells, CD34 and Bcl-2 positive. Glioma is out and a new leader appears." },
+    { r: ["sft", "sarcoma", "mets"], why: "CT is not in the record. No change." },
+    { r: ["sft", "mening", "sarcoma"], why: "Molecular testing is not in the record. The agent weighs spindle-cell look-alikes." },
+    { r: ["sft", "mening", "lymph"], why: "The search turns up nothing that fits better." },
+    { r: ["sft"], why: "Committed." }
+  ];
+  var ddxEl = $("#ddx");
+  ddxEl.innerHTML = '<h4>Competing diagnoses</h4><p class="why"></p><ol>' +
+    Object.keys(DX).map(function (k) { return '<li class="out" data-k="' + k + '"><span></span>' + DX[k] + "</li>"; }).join("") +
+    '</ol><div class="gone"></div><p class="src">Condensed from the agent’s own reasoning at each turn. Order is the agent’s, not a probability.</p>';
+  function drawDdx(i) {
+    var d = DDX[i], prev = i ? DDX[i - 1].r : [], everSeen = {};
+    for (var k = 0; k <= i; k++) DDX[k].r.forEach(function (x) { everSeen[x] = 1; });
+    ddxEl.querySelector(".why").textContent = d.why;
+    ddxEl.querySelector("ol").style.minHeight = (4 * 40 - 6) + "px";
+    [].forEach.call(ddxEl.querySelectorAll("li"), function (li) {
+      var rank = d.r.indexOf(li.dataset.k);
+      li.className = rank < 0 ? "out" : (rank === 0 ? "lead" : "") + (prev.indexOf(li.dataset.k) < 0 && i ? " fresh" : "");
+      if (rank >= 0) { li.style.transform = "translateY(" + rank * 40 + "px)"; li.firstChild.textContent = rank + 1; }
+    });
+    var gone = Object.keys(everSeen).filter(function (x) { return d.r.indexOf(x) < 0; });
+    ddxEl.querySelector(".gone").innerHTML = gone.length ? "Set aside: " + gone.map(function (x) { return "<s>" + DX[x] + "</s>"; }).join("") : "";
+  }
+
+  /* ---------- turn navigation ---------- */
+  var rail = $("#rail"), player = $("#player"), meters = $("#meters");
+  rail.innerHTML = steps.map(function (s, i) {
+    return '<button data-i="' + i + '" data-phase="' + s.phase + '" title="' + (s.n ? "Turn " + s.n + ": " : "") + esc(TITLES[s.verb]) + '">' + (s.n ? "Turn " + s.n : "Opening") + "</button>";
+  }).join("");
+  var railBtns = [].slice.call(rail.children), cur = -1;
+  function meter(label, v, max) {
+    return '<div class="meter">' + label + " <b>" + v + "/" + max + '</b><i><u style="transform:scaleX(' + (v / max) + ')"></u></i></div>';
+  }
+  function go(i) {
+    i = Math.max(0, Math.min(steps.length - 1, i));
+    if (i === cur) return;
+    cur = i;
+    var s = steps[i], t = s.totals;
+    player.dataset.phase = s.phase;
+    $("#where").textContent = PHASE_NAME[s.phase];
+    $("#count").textContent = s.n ? "Turn " + s.n + " of " + N : "Before turn 1";
+    railBtns.forEach(function (b, k) { b.classList.toggle("seen", k < i); b.classList.toggle("now", k === i); b.setAttribute("aria-current", k === i ? "step" : "false"); });
+    $("#prev").disabled = i === 0;
+    $("#next").disabled = i === steps.length - 1;
+    drawFaces(s, i); drawThread(i); drawSide(s, i); drawDdx(i);
+    $(".side").scrollTop = 0;
+    meters.innerHTML = meter("Questions", t.asks, E.budgets.asks) + meter("Workup turns", t.work, E.budgets.workup) +
+      meter("Searches", t.searches, E.budgets.searches) + meter("Facts found", t.facts, E.metrics.factsTotal);
+  }
+  go(0);
+
+  var playing = null, playBtn = $("#play");
+  function stop() { if (playing) { clearTimeout(playing); playing = null; playBtn.setAttribute("aria-pressed", "false"); playBtn.textContent = "▶ Play"; } }
+  function play() {
+    playBtn.setAttribute("aria-pressed", "true"); playBtn.textContent = "❚❚ Pause";
+    go(cur >= steps.length - 1 ? 0 : cur + 1);
+    (function tick() {
+      playing = setTimeout(function () { if (cur >= steps.length - 1) stop(); else { go(cur + 1); tick(); } }, 3600 + lastDelay * 1000);
+    })();
+  }
+  function inView() { var r = player.getBoundingClientRect(); return r.top < innerHeight * 0.6 && r.bottom > innerHeight * 0.4; }
+  playBtn.addEventListener("click", function () { playing ? stop() : play(); });
+  $("#prev").addEventListener("click", function () { stop(); go(cur - 1); });
+  $("#next").addEventListener("click", function () { stop(); go(cur + 1); });
+  rail.addEventListener("click", function (e) { var b = e.target.closest("button"); if (b) { stop(); go(+b.dataset.i); } });
+  $("#phases").addEventListener("click", function (e) {
+    var b = e.target.closest("button"); if (!b) return;
+    stop(); go(steps.findIndex(function (s) { return s.n === +b.dataset.jump; }));
+    player.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+  });
+  addEventListener("keydown", function (e) {
+    if (/INPUT|TEXTAREA|SELECT/.test(e.target.tagName) || !inView()) return;
+    if (e.key === "ArrowRight") { e.preventDefault(); stop(); go(cur + 1); }
+    if (e.key === "ArrowLeft") { e.preventDefault(); stop(); go(cur - 1); }
+  });
+
+  /* ---------- image zoom ---------- */
+  var zoom = $("#zoom");
+  document.addEventListener("click", function (e) {
+    var t = e.target.closest("[data-zoom]"); if (!t) return;
+    var im = new Image(); im.src = t.dataset.zoom; im.alt = t.dataset.cap;
+    zoom.querySelector("figure").replaceChildren(im);
+    zoom.querySelector("span").textContent = t.dataset.cap;
+    zoom.showModal();
+  });
+  zoom.addEventListener("click", function (e) { if (e.target === zoom) zoom.close(); });
+
+  /* ---------- gate game ---------- */
+  (function () {
+    var who = SW.patient.replace(/^Results for patient /, "").replace(/:$/, "");
+    $("#gate-order").innerHTML = "Ordered: <b>" + esc(SW.images[0].ordered) + "</b><br>Patient " + esc(who);
+    var pick = $("#gate-pick"), out = $("#gate-out"), submit = $("#gate-both");
+    var answers = SW.images.map(function () { return null; });   // true = "matches"
+    pick.innerHTML = SW.images.map(function (im, k) {
+      var n = k + 1;
+      return '<div class="pic" data-k="' + k + '">' +
+        '<button class="shot" data-zoom="' + esc(im.src) + '" data-cap="Returned image ' + n + '"><img src="' + esc(im.src) + '" alt="Returned image ' + n + '"><span>Image ' + n + "</span></button>" +
+        '<div class="choose" role="group" aria-label="Image ' + n + '">' +
+        '<button data-v="1" aria-pressed="false">Image ' + n + " matches</button>" +
+        '<button data-v="0" aria-pressed="false">Image ' + n + " does not match</button></div></div>";
+    }).join("");
+    var PAY = [
+      ["Flag the swap and name what is wrong", 1.25, "catch"],
+      ["Pass evidence that really is clean", 1.0, "clean"],
+      ["Flag the swap but for the wrong reason", 0.75, "axis"],
+      ["Raise a false alarm on clean evidence", -0.5, "alarm"],
+      ["Wave a swapped image through", -2.0, "miss"]
+    ];
+    pick.addEventListener("click", function (e) {
+      var b = e.target.closest(".choose button"); if (!b || b.disabled) return;
+      var k = +b.closest(".pic").dataset.k;
+      answers[k] = b.dataset.v === "1";
+      [].forEach.call(b.parentNode.children, function (x) { x.setAttribute("aria-pressed", x === b); });
+      submit.disabled = answers.some(function (a) { return a === null; });
+    });
+    submit.addEventListener("click", function () {
+      var swappedIdx = SW.images.findIndex(function (im) { return im.swapped; });
+      var flaggedSwap = answers[swappedIdx] === false;
+      var falseFlags = answers.filter(function (a, k) { return a === false && k !== swappedIdx; }).length;
+      [].forEach.call(pick.children, function (pic, k) {
+        pic.classList.add(k === swappedIdx ? "swapped" : "fine");
+        [].forEach.call(pic.querySelectorAll(".choose button"), function (x) {
+          x.disabled = true;
+          x.classList.add((x.dataset.v === "1") === (k !== swappedIdx) ? "right" : "wrong");
+        });
+      });
+      submit.disabled = true;
+      var mine = flaggedSwap ? "catch" : "miss";
+      var head = flaggedSwap ? (falseFlags ? "Caught it, with one false accusation." : "Caught it.") : "That one got through.";
+      var extra = !flaggedSwap
+        ? (falseFlags ? "You flagged the real chest CT and passed the swapped one. " : "Passing both would have sent the agent on to reason about someone else’s brain. ")
+        : (falseFlags ? "Image " + (2 - swappedIdx) + " was the real chest CT. The check scores one verdict for the whole batch, so a mismatch call still counts as a catch here. " : "");
+      out.innerHTML =
+        "<h3 style=\"font-size:1.35rem\">" + head + "</h3>" +
+        "<p style=\"margin-top:10px\">Image " + (swappedIdx + 1) + " is a head CT lifted from an unrelated case report. The order was for the chest. " + extra + "</p>" +
+        "<p>The agent’s move on this episode:</p><code class=\"action\"><b>&lt;action&gt;</b>" + esc(SW.action) + "<b>&lt;/action&gt;</b></code>" +
+        "<p>It then stopped and handed the case to a human instead of diagnosing from evidence it could not trust.</p>" +
+        '<details class="why"><summary>Read the agent’s reasoning</summary><div>' + esc(SW.think) + "</div></details>" +
+        '<ul class="payout">' + PAY.map(function (p) {
+          return '<li class="' + (p[2] === mine ? "you" : "") + '"><span>' + p[0] + (p[2] === mine ? " (you)" : "") + "</span><b>" + (p[1] > 0 ? "+" : "−") + Math.abs(p[1]).toFixed(2) + "</b></li>";
+        }).join("") + "</ul>" +
+        '<p class="note">Missing a swap costs more than any diagnosis can earn back, so the agent learns to look first.</p>';
+      out.classList.add("show");
+    });
+  })();
+
+  /* ---------- scoring ---------- */
+  (function () {
+    var w = 1, cov = $("#cov"), F = 0.10, P = 0.5;
+    function mult(c) { return F + (1 - F) * Math.pow(c, P); }
+    var d = "";
+    for (var x = 0; x <= 100; x++) d += (x ? "L" : "M") + (x * 4) + " " + (110 - 100 * mult(x / 100)).toFixed(1);
+    $("#curve-path").setAttribute("d", d);
+    function upd() {
+      var c = cov.value / 100, v = w * mult(c);
+      $("#cov-out").textContent = cov.value + "%";
+      $("#score").textContent = v.toFixed(2);
+      $("#score-note").textContent = c === 0
+        ? "A correct guess with no verified evidence keeps a tenth of its credit."
+        : c < 1 ? "The curve is steep at the start: the first verified findings pay the most."
+        : "Every available study obtained and verified: full credit.";
+      $("#curve-dot").setAttribute("cx", c * 400);
+      $("#curve-dot").setAttribute("cy", 110 - 100 * mult(c));
+    }
+    cov.addEventListener("input", upd);
+    $("#match").addEventListener("click", function (e) {
+      var b = e.target.closest("button"); if (!b) return;
+      [].forEach.call(this.children, function (x) { x.setAttribute("aria-pressed", x === b); });
+      w = +b.dataset.w; upd();
+    });
+    upd();
+
+    var J = E.judge;
+    var SRC = { mondo: "MONDO", medgen_umls: "UMLS", ordo: "Orphanet" };
+    var REL = { b_subtype_of_a: "a subtype of the label", unrelated: "no link found", distant: "distantly related" };
+    $("#floor-note").textContent = "“" + J.pred.replace(/ \(.*/, "") + "” against the label “" + J.gold + "”. Three disease ontologies are checked. A link can lift a verdict to “same core disease”; no link never lowers one.";
+    $("#floor").innerHTML = Object.keys(J.relations).map(function (k) {
+      var r = J.relations[k];
+      return '<div class="' + (r === "b_subtype_of_a" ? "lift" : "") + '"><span>' + SRC[k] + "</span><span>matched to “" + esc(J.labels[k].b) + "”</span><span>" + (REL[r] || esc(r)) + "</span></div>";
+    }).join("");
+  })();
+
+  /* ---------- paper details: edit here ---------- */
+  var PAPER = {
+    title: "TrustMed-RL: A Two-Phase, Evidence-Gated Clinical Agent Environment",
+    authors: ["Amber"],            // first author first; add full names and co-authors
+    arxiv: "",                     // e.g. "2611.01234"; empty shows a placeholder
+    year: 2026
+  };
+  (function () {
+    var id = PAPER.arxiv || "XXXX.XXXXX";
+    $("#byline").textContent = PAPER.authors.join(", ");
+    var link = $("#paper-link");
+    if (PAPER.arxiv) link.href = "https://arxiv.org/abs/" + PAPER.arxiv;
+    var key = PAPER.authors[0].split(" ").pop().toLowerCase() + PAPER.year + "trustmedrl";
+    $("#bib").textContent = "@article{" + key + ",\n  title   = {" + PAPER.title + "},\n  author  = {" + PAPER.authors.join(" and ") +
+      "},\n  journal = {arXiv preprint arXiv:" + id + "},\n  year    = {" + PAPER.year + "}\n}";
+  })();
+
+  /* ---------- results and workup ability ----------
+     All eight models scored the same way: protocol v2 (gpt-5-mini judge, rubric v2, ontology floor),
+     2,500 clean test cases per run, same conventions as sonnet55_compare_table.py. */
+  var MODELS = [
+    { name: "TrustMed-RL 8B (ours)", cls: "ours", acc: 37.8, strict: 16.1, acc50: 33.1, unbacked: 12.4, dx: 92.8, findings: 73.2, workup: 17.75, orders: 10.09, consults: 1.69, searches: 2.02 },
+    { name: "Same 8B model, SFT only", cls: "stage", acc: 29.0, strict: 13.4, acc50: 21.8, unbacked: 24.8, dx: 69.9, findings: 57.1, workup: 10.23, orders: 5.33, consults: 1.19, searches: 0.71 },
+    { name: "Qwen3-VL-8B (untrained base)", cls: "stage", acc: 22.3, strict: 12.4, acc50: 8.2, unbacked: 63.2, dx: 58.6, findings: 30.8, workup: 5.62, orders: 3.27, consults: 0.72, searches: 0.19 },
+    { name: "Qwen3-VL-32B", acc: 32.1, strict: 16.6, acc50: 22.1, unbacked: 31.2, dx: 83.3, findings: 47.1, workup: 11.47, orders: 6.26, consults: 1.05, searches: 1.04 },
+    { name: "HealthGPT-Pro-27B", acc: 36.9, strict: 20.5, acc50: 24.7, unbacked: 33.1, dx: 79.8, findings: 53.3, workup: 12.28, orders: 5.64, consults: 1.21, searches: 0.79 },
+    { name: "PulseMind-72B", acc: 24.2, strict: 12.4, acc50: 11.9, unbacked: 50.8, dx: 71.4, findings: 37.6, workup: 7.24, orders: 3.73, consults: 0.77, searches: 0.50 },
+    { name: "GPT-4o", acc: 39.9, strict: 22.8, acc50: 26.7, unbacked: 33.1, dx: 84.7, findings: 53.5, workup: 10.93, orders: 6.93, consults: 1.21, searches: 1.00 },
+    { name: "GPT-5 (minimal reasoning)", acc: 54.7, strict: 22.5, acc50: 43.7, unbacked: 20.1, dx: 91.2, findings: 62.8, workup: 12.82, orders: 8.05, consults: 1.45, searches: 0.90 }
+  ];
+  var JUDGE_NOTE = " Judge for all eight: gpt-5-mini, rubric v2, with the ontology floor. Our 8B rows average 3 seeds.";
+  function chart(segId, barsId, capId, metrics, note) {
+    var keys = Object.keys(metrics), seg = $(segId), bars = $(barsId);
+    seg.innerHTML = keys.map(function (k, n) { return '<button data-m="' + k + '" aria-pressed="' + (n === 0) + '">' + metrics[k].label + "</button>"; }).join("");
+    bars.innerHTML = MODELS.map(function (r) { return '<div class="bar ' + (r.cls || "") + '"><span>' + r.name + "</span><i><u></u></i><b></b></div>"; }).join("");
+    function set(k) {
+      var m = metrics[k];
+      [].forEach.call(bars.children, function (el, n) {
+        var v = MODELS[n][k];
+        el.querySelector("u").style.transform = "scaleX(" + Math.min(1, v / m.max) + ")";
+        el.querySelector("b").textContent = v.toFixed(m.dp == null ? 1 : m.dp) + (m.unit || "");
+      });
+      $(capId).textContent = m.cap + note;
+    }
+    seg.addEventListener("click", function (e) {
+      var b = e.target.closest("button"); if (!b) return;
+      [].forEach.call(seg.children, function (x) { x.setAttribute("aria-pressed", x === b); });
+      set(b.dataset.m);
+    });
+    var seen = new IntersectionObserver(function (en) { if (en[0].isIntersecting) { set(keys[0]); seen.disconnect(); } }, { threshold: 0.2 });
+    seen.observe(bars);
+  }
+  chart("#metric", "#bars", "#metric-cap", {
+    acc: { label: "Accuracy", max: 60, unit: "%", cap: "Share of test cases answered correctly (right disease named, or a correct abstention on an unsolvable case). GPT-5 leads and GPT-4o is 2 points ahead of us. The trained 8B model is ahead of Qwen3-VL-32B and PulseMind-72B, about level with HealthGPT-Pro-27B (0.9 points, inside seed noise), and 15.5 points above its own untrained base." },
+    strict: { label: "Strict accuracy", max: 60, unit: "%", cap: "Counts only diagnoses that match every labelled condition in full. Here Qwen3-VL-32B, HealthGPT-Pro, GPT-4o and GPT-5 are all ahead of us." },
+    acc50: { label: "Correct and evidence-backed", max: 60, unit: "%", cap: "Correct, and the agent had obtained at least half of the evidence the case holds. Second only to GPT-5." },
+    unbacked: { label: "Correct but unbacked", max: 70, unit: "%", cap: "Share of each model’s correct answers given with less than half the evidence in hand. Lower is better; ours is the lowest of the eight." }
+  }, JUDGE_NOTE);
+  chart("#wmetric", "#wbars", "#wmetric-cap", {
+    findings: { label: "Findings obtained", max: 100, unit: "%", cap: "Share of the test findings a case holds that the agent actually obtained. Highest of the eight." },
+    dx: { label: "Reaches a diagnosis", max: 100, unit: "%", cap: "Share of episodes that end in a diagnosis and not an abstention or a forfeit." },
+    workup: { label: "Workup turns", max: 20, dp: 1, cap: "Examination, test, consult and search turns per episode, out of a budget of 20." },
+    orders: { label: "Tests ordered", max: 12, dp: 1, cap: "Test categories ordered per episode." },
+    consults: { label: "Specialist consults", max: 2.5, dp: 2, cap: "Specialist reads requested per episode. A consult only pays off after the images pass the evidence check." },
+    searches: { label: "Literature searches", max: 3, dp: 2, cap: "Searches per episode, out of a budget of 3." }
+  }, " Counts are per episode and do not depend on any judge. The cost of the extra activity: 1.19 rejected actions per episode after RL against 0.14 after SFT.");
+  (function () {
+    var rl = MODELS[0], sft = MODELS[1], base = MODELS[2];
+    var rows = [["Findings obtained", "findings", "%", 1], ["Reaches a diagnosis", "dx", "%", 1], ["Workup turns per case", "workup", "", 1],
+                ["Tests ordered per case", "orders", "", 1], ["Specialist consults per case", "consults", "", 2], ["Literature searches per case", "searches", "", 2],
+                ["Correct and evidence-backed", "acc50", "%", 1]];
+    $("#ladder").innerHTML = "<tr><th>Same 8B model</th><th>Untrained</th><th>After SFT</th><th>After RL</th></tr>" + rows.map(function (r) {
+      var f = function (m) { return m[r[1]].toFixed(r[3]) + r[2]; };
+      return "<tr><td>" + r[0] + "</td><td>" + f(base) + "</td><td>" + f(sft) + "</td><td>" + f(rl) + "</td></tr>";
+    }).join("");
+  })();
+
+  /* ---------- credits ---------- */
+  var pmc = function (id) { return '<a href="https://pmc.ncbi.nlm.nih.gov/articles/' + id + '/">' + id + "</a>"; };
+  $("#credits").innerHTML = "Case material and images come from open-access case reports in PubMed Central: " +
+    pmc(E.pmcid) + " (the consultation), " + pmc(SW.pmcid) + " and " + pmc(SW.donor) + " (the evidence check). Images remain under their original licenses.";
+})();
+</script>
+</body>
+</html>
